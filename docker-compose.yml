@@ -1,0 +1,108 @@
+# docker-compose.mac.yml
+# Оптимизировано для macOS
+
+version: '3.8'
+
+services:
+  deduplicator:
+    build:
+      context: .
+      dockerfile: Dockerfile.mac
+      args:
+        # Передаем архитектуру для оптимизации
+        TARGETARCH: ${TARGETARCH:-arm64}
+    
+    container_name: product_deduplicator
+    
+    # Команда по умолчанию
+    command: >
+      python main.py 
+      --mode predict 
+      --input /app/data/products.csv 
+      --output /app/output/
+    
+    # Переменные окружения для Mac
+    environment:
+      # Python
+      - PYTHONIOENCODING=utf-8
+      - PYTHONUNBUFFERED=1
+      
+      # Отключаем GPU (на Mac только CPU)
+      - CUDA_VISIBLE_DEVICES=-1
+      
+      # Оптимизация CPU для Mac
+      - OMP_NUM_THREADS=4
+      - MKL_NUM_THREADS=4
+      - OPENBLAS_NUM_THREADS=4
+      - VECLIB_MAXIMUM_THREADS=4
+      
+      # PyTorch на Mac
+      - PYTORCH_ENABLE_MPS_FALLBACK=1
+      - PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0
+      
+      # Параметры модели
+      - MODEL_PATH=/app/models/fine_tuned
+      - SIMILARITY_THRESHOLD=0.85
+      
+      # Для ускорения на Mac
+      - TOKENIZERS_PARALLELISM=true
+    
+    # Монтирование папок
+    volumes:
+      # Данные (используем :delegated для ускорения на Mac)
+      - ./data:/app/data:delegated
+      # Результаты
+      - ./output:/app/output:delegated
+      # Модели
+      - ./models:/app/models:delegated
+      # Логи
+      - ./logs:/app/logs:delegated
+    
+    # Ограничения ресурсов (важно для Mac!)
+    deploy:
+      resources:
+        limits:
+          memory: 6G      # Не больше 6 ГБ (подстройте под свою систему)
+          cpus: '4'       # 4 ядра
+        reservations:
+          memory: 2G      # Минимум 2 ГБ
+          cpus: '2'       # Минимум 2 ядра
+    
+    # Перезапуск при ошибках
+    restart: unless-stopped
+    
+    # Сеть
+    networks:
+      - deduplicator_net
+
+  # Легковесный API для тестирования
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.mac
+    
+    container_name: deduplicator_api
+    
+    command: uvicorn api:app --host 0.0.0.0 --port 8000 --workers 2
+    
+    ports:
+      - "8000:8000"
+    
+    environment:
+      - PYTHONIOENCODING=utf-8
+      - MODEL_PATH=/app/models/fine_tuned
+      - CUDA_VISIBLE_DEVICES=-1
+    
+    volumes:
+      - ./data:/app/data:delegated
+      - ./models:/app/models:delegated
+    
+    depends_on:
+      - deduplicator
+    
+    networks:
+      - deduplicator_net
+
+networks:
+  deduplicator_net:
+    driver: bridge
